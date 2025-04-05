@@ -1,6 +1,6 @@
 name: robot_control_center
 description: A control center app for personal robot
-publish_to: 'none'
+publish_to: 'codejapoe'
 version: 1.0.0+1
 
 environment:
@@ -18,4 +18,6 @@ dev_dependencies:
   flutter_lints: ^2.0.0
 
 flutter:
-  uses-material-design: true 
+  uses-material-design: true
+  assets:
+    - assets/EVE.gif

@@ -17,4 +17,4 @@ class ApiService {
       throw Exception('Error sending command: $e');
     }
   }
-} 
+}
