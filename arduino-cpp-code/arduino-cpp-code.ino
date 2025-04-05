@@ -181,26 +181,26 @@ void processCommand(char command, int value) {
 // Motor control functions
 void forward(int speed) {
   currentSpeed = constrain(speed, 0, 255);
-  Encoder_1.setTarPWM(-currentSpeed);
-  Encoder_2.setTarPWM(currentSpeed);
+  Encoder_1.setTarPWM(currentSpeed);
+  Encoder_2.setTarPWM(-currentSpeed);
 }
 
 void backward(int speed) {
   currentSpeed = constrain(speed, 0, 255);
-  Encoder_1.setTarPWM(currentSpeed);
-  Encoder_2.setTarPWM(-currentSpeed);
+  Encoder_1.setTarPWM(-currentSpeed);
+  Encoder_2.setTarPWM(currentSpeed);
 }
 
 void turnRight(int speed) {
   currentSpeed = constrain(speed, 0, 255);
-  Encoder_1.setTarPWM(currentSpeed);
-  Encoder_2.setTarPWM(currentSpeed);
+  Encoder_1.setTarPWM(-currentSpeed);
+  Encoder_2.setTarPWM(-currentSpeed);
 }
 
 void turnLeft(int speed) {
   currentSpeed = constrain(speed, 0, 255);
-  Encoder_1.setTarPWM(-currentSpeed);
-  Encoder_2.setTarPWM(-currentSpeed);
+  Encoder_1.setTarPWM(currentSpeed);
+  Encoder_2.setTarPWM(currentSpeed);
 }
 
 void stopMotors() {
