@@ -2,155 +2,191 @@
 #include <Wire.h> // Required for Gyro according to the document
 
 // --- Configuration ---
-// Encoder setup (as per your code and document examples)
 MeEncoderOnBoard Encoder_1(SLOT1);
 MeEncoderOnBoard Encoder_2(SLOT2);
-
-// Gyro setup (based on document example for onboard gyro)
-// Port 1, Address 0x69 is standard for the onboard gyro mentioned in the doc
 MeGyro gyro(1, 0x69);
 
 // --- Balancing Variables ---
-float currentAngleX = 0;   // Variable to store current front/back tilt angle
-float targetAngle = 0.0; // Target angle for balancing (upright)
+float currentAngleX = 0;
+float targetAngle = 0.0; // Target angle, now tunable via Serial ('T' command)
 
 // --- PID Controller Variables ---
-// !!! CRITICAL: THESE VALUES ARE PLACEHOLDERS AND MUST BE TUNED !!!
-// The document explains PID conceptually but does not provide tuned values.
-// Start with small values and tune experimentally.
-float Kp = 2.0;  // Proportional Gain - Reacts to current error
-float Ki = 0.1;  // Integral Gain - Accumulates past errors to eliminate steady-state error
-float Kd = 0.5;  // Derivative Gain - Reacts to the rate of change of error (damping)
+// Initial values can still be set here, but they can be overridden via Serial.
+float Kp = 60.0;  // Tunable via Serial ('P' command)
+float Ki = 0.1;  // Tunable via Serial ('I' command)
+float Kd = 1.3;  // Tunable via Serial ('D' command)
 
 float error = 0;
 float lastError = 0;
 float integral = 0;
 float derivative = 0;
-int motorPower = 0; // Calculated motor power output (-255 to 255)
+int motorPower = 0;
 
 // --- Timing ---
 unsigned long loopStartTime = 0;
-unsigned long previousTime = 0; // For calculating dt
+unsigned long previousTime = 0;
+
+// --- Function Declarations ---
+void calculateMotorPower();
+void stopMotors();
+void handleSerialCommands(); // New function to handle serial input
 
 void setup() {
-  // Start Serial communication (baud rate from examples)
   Serial.begin(115200);
   Serial.println("Starting Self-Balancing Robot Setup...");
-
-  // Initialize Gyro (based on document example)
+  Serial.println("Initializing Gyro...");
   gyro.begin();
-  Serial.println("Gyro Initialized. Calibrating...");
-  // Optional: Perform gyro calibration if needed, though the basic example doesn't show it prominently.
-  // gyro.deviceCalibration(); // Mentioned in the doc, might help accuracy.
-  delay(1000); // Allow time for calibration/settling
+  // gyro.deviceCalibration(); // Optional calibration
+  delay(1000);
   Serial.println("Gyro Ready.");
 
-  // Set PWM Frequency for motors (from document examples)
-  // This setup is required for MeEncoderOnBoard PWM control modes.
+  Serial.println("Setting Motor PWM Frequency...");
   TCCR1A = _BV(WGM10);
   TCCR1B = _BV(CS11) | _BV(WGM12);
   TCCR2A = _BV(WGM21) | _BV(WGM20);
   TCCR2B = _BV(CS21);
-  Serial.println("Motor PWM Frequency Set (8KHz).");
+  Serial.println("Motor PWM Ready.");
 
-  // Ensure motors are stopped initially
-  stopMotors();
-  Serial.println("Motors Stopped.");
+  stopMotors(); // Ensure motors are stopped
 
-  previousTime = millis(); // Initialize timing variable
-  Serial.println("Setup Complete. Entering Balancing Loop.");
+  previousTime = millis();
+  Serial.println("\nSetup Complete. Entering Balancing Loop.");
+  Serial.println("--- Serial Tuning Commands ---");
+  Serial.println("P<value> : Set Kp (e.g., P2.5)");
+  Serial.println("I<value> : Set Ki (e.g., I0.05)");
+  Serial.println("D<value> : Set Kd (e.g., D0.8)");
+  Serial.println("T<value> : Set Target Angle (e.g., T-0.2)");
+  Serial.println("S         : Stop motors and reset PID");
+  Serial.println("?         : Print current PID values");
+  Serial.println("------------------------------\n");
 }
 
 void loop() {
   loopStartTime = millis();
 
+  // --- NEW: Handle Serial Commands ---
+  // Check for incoming commands to adjust PID values
+  handleSerialCommands();
+
   // --- 1. Read Sensor ---
-  // Update Gyro Readings (based on document example)
   gyro.update();
-  currentAngleX = gyro.getAngleX(); // Get the primary tilt angle (front/back)
+  currentAngleX = gyro.getAngleX();
 
   // --- 2. Calculate Control Signal (PID) ---
   calculateMotorPower();
 
   // --- 3. Actuate Motors ---
-  // Apply calculated power to motors.
-  // Use setMotorPwm for direct PWM control as suggested by motor examples for immediate response.
-  // The sign (+/-) might need swapping depending on motor wiring and orientation.
-  // For balancing, both motors typically get the same magnitude command.
+  // IMPORTANT: Check motor direction during testing.
+  // If it accelerates falling over, swap the signs (e.g., use +motorPower for both).
   Encoder_1.setMotorPwm(motorPower);
-  Encoder_2.setMotorPwm(motorPower);
+  Encoder_2.setMotorPwm(-motorPower); // Often both motors need the same sign for forward/backward balancing correction. Test this!
 
   // --- 4. Optional: Debugging Output ---
-  // Print essential values periodically for tuning. Printing too often can slow down the loop.
   static unsigned long lastPrintTime = 0;
   if (millis() - lastPrintTime > 100) { // Print every 100ms
-    Serial.print("AngleX: "); Serial.print(currentAngleX);
-    Serial.print(" | Err: "); Serial.print(error);
-    Serial.print(" | P: "); Serial.print(Kp * error);
-    Serial.print(" | I: "); Serial.print(Ki * integral);
-    Serial.print(" | D: "); Serial.print(Kd * derivative);
-    Serial.print(" | Pwr: "); Serial.println(motorPower);
+    // Reduced print frequency slightly to make tuning output clearer
+    Serial.print("AngX:"); Serial.print(currentAngleX, 2); // Print with 2 decimal places
+    // Serial.print(" | Err:"); Serial.print(error, 2); // Optional: Error details
+    Serial.print(" | Pwr:"); Serial.print(motorPower);
+    // Serial.print(" | Kp:"); Serial.print(Kp); // Optional: PID values check
+    // Serial.print(" Ki:"); Serial.print(Ki);
+    // Serial.print(" Kd:"); Serial.print(Kd);
+    // Serial.print(" Tgt:"); Serial.print(targetAngle);
+    Serial.println(); // Newline for readability
     lastPrintTime = millis();
   }
 
-  // --- Loop Timing Control ---
-  // Ensure the loop runs at a relatively consistent rate if needed, though basic examples don't enforce this.
-  // A delay might be needed if the loop runs too fast, but often it's better to run as fast as possible.
-  // delay(10); // Example: Small delay, adjust as needed during tuning.
-  
-  // Note: The MeEncoderOnBoard::loop() function is essential if using setTarPWM, runSpeed, or moveTo methods,
-  // as it handles the internal PID/ramping for those specific functions.
-  // For direct setMotorPwm control used here for balancing, it might not be strictly necessary for the
-  // balancing itself, but harmless to include if you might use other encoder functions later.
+  // Required MeEncoderOnBoard loop calls if using certain modes, harmless to keep
   Encoder_1.loop();
   Encoder_2.loop();
 }
 
 // --- PID Calculation Function ---
 void calculateMotorPower() {
-  // Calculate time difference (dt) for integral and derivative terms - basic approach
   unsigned long currentTime = millis();
-  float dt = (currentTime - previousTime) / 1000.0; // Time difference in seconds
+  float dt = (currentTime - previousTime) / 1000.0;
   previousTime = currentTime;
-  
-  // Avoid division by zero or huge dt on first loop
-  if (dt <= 0 || dt > 0.5) dt = 0.01; // Assume a nominal dt if unreasonable
 
-  error = targetAngle - currentAngleX; // Calculate the error (difference from vertical)
+  if (dt <= 0 || dt > 0.5) dt = 0.01; // Basic dt sanity check
 
-  // Integral term (accumulates error over time)
+  error = targetAngle - currentAngleX;
   integral += error * dt;
-  // Optional: Anti-windup for integral term (prevent it from growing too large)
-  integral = constrain(integral, -100, 100); // Adjust limits as needed during tuning
+  integral = constrain(integral, -100, 100); // Integral anti-windup
 
-  // Derivative term (rate of change of error)
-  derivative = (error - lastError) / dt;
+  // Add check for valid dt before division
+  if (dt > 0) {
+      derivative = (error - lastError) / dt;
+  } else {
+      derivative = 0; // Avoid division by zero
+  }
 
-  // PID Calculation: Sum of the three components
   motorPower = (Kp * error) + (Ki * integral) + (Kd * derivative);
-
-  // Store error for next derivative calculation
   lastError = error;
-
-  // Constrain motor power to valid PWM range (-255 to 255)
-  // The MeEncoderOnBoard library functions typically accept -255 to 255.
   motorPower = constrain(motorPower, -255, 255);
 }
 
 // --- Motor Stop Function ---
 void stopMotors() {
-  // Use setMotorPwm for direct control, ensuring immediate stop
   Encoder_1.setMotorPwm(0);
   Encoder_2.setMotorPwm(0);
-  motorPower = 0;   // Reset calculated power
-  integral = 0;     // Reset integral term when stopped
-  lastError = 0;    // Reset last error
+  motorPower = 0;
+  integral = 0;
+  lastError = 0; // Reset PID state variables
+  derivative = 0; // Also reset derivative
   Serial.println("CMD: Motors Stopped, PID Reset.");
 }
 
-// --- Note on other functions (forward, backward, turn, processCommand) ---
-// Your original functions for movement (forward, backward, turnLeft, turnRight)
-// and command processing (processCommand) are not included in this basic balancing loop.
-// Integrating movement requires modifying the 'targetAngle' based on commands
-// or adding the movement command value to the PID output, which adds complexity
-// beyond the direct examples in the reference document.
+// --- NEW: Serial Command Handler ---
+void handleSerialCommands() {
+  if (Serial.available() > 0) {
+    String input = Serial.readStringUntil('\n');
+    input.trim(); // Remove leading/trailing whitespace
+
+    if (input.length() > 0) {
+      char command = input.charAt(0);
+      String valueStr = input.substring(1);
+      float value = valueStr.toFloat(); // Convert remaining string to float
+
+      switch (command) {
+        case 'P':
+        case 'p':
+          Kp = value;
+          Serial.print("CMD: Set Kp = "); Serial.println(Kp);
+          break;
+        case 'I':
+        case 'i':
+          Ki = value;
+          // Reset integral when Ki changes to prevent sudden jumps
+          integral = 0;
+          Serial.print("CMD: Set Ki = "); Serial.println(Ki);
+          Serial.println("     (Integral term reset)");
+          break;
+        case 'D':
+        case 'd':
+          Kd = value;
+          Serial.print("CMD: Set Kd = "); Serial.println(Kd);
+          break;
+        case 'T':
+        case 't':
+          targetAngle = value;
+          Serial.print("CMD: Set Target Angle = "); Serial.println(targetAngle);
+          break;
+        case 'S':
+        case 's':
+          stopMotors(); // Use the existing stop function
+          break;
+        case '?':
+          Serial.println("--- Current PID Values ---");
+          Serial.print("Kp = "); Serial.println(Kp);
+          Serial.print("Ki = "); Serial.println(Ki);
+          Serial.print("Kd = "); Serial.println(Kd);
+          Serial.print("Target Angle = "); Serial.println(targetAngle);
+          Serial.println("--------------------------");
+          break;
+        default:
+          Serial.print("ERR: Unknown command: "); Serial.println(input);
+          break;
+      }
+    }
+  }
+}
