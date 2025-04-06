@@ -1,0 +1,2 @@
+/Users/aungkaungkhant/Documents/Emo-Robo/SFHacks/flutter-app/android/app/.cxx/Debug/295m41v4/arm64-v8a/CMakeFiles/edit_cache.dir
+/Users/aungkaungkhant/Documents/Emo-Robo/SFHacks/flutter-app/android/app/.cxx/Debug/295m41v4/arm64-v8a/CMakeFiles/rebuild_cache.dir

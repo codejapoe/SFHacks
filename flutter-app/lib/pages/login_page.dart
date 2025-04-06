@@ -51,8 +51,8 @@ class _LoginPageState extends State<LoginPage> {
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
             colors: [
-              Colors.black,
-              Colors.black,
+              Colors.blue.shade500,
+              Colors.blue.shade300,
             ],
           ),
         ),
@@ -130,7 +130,7 @@ class _LoginPageState extends State<LoginPage> {
                             onPressed: _isLoading ? null : _handleLogin,
                             style: ElevatedButton.styleFrom(
                               padding: const EdgeInsets.symmetric(
-                                vertical: 16,
+                                vertical: 12,
                               ),
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(10),
@@ -138,7 +138,7 @@ class _LoginPageState extends State<LoginPage> {
                             ),
                             child: _isLoading
                                 ? const SizedBox(
-                                    height: 20,
+                                    height: 26,
                                     width: 20,
                                     child: CircularProgressIndicator(
                                       strokeWidth: 2,
