@@ -166,14 +166,14 @@ void processCommand(char command, int value) {
 // These now only SET the target PWM. The loop's distance check can override them.
 void forward(int speed) {
   currentSpeed = constrain(speed, 0, 255);
-  Encoder_1.setTarPWM(-currentSpeed);
-  Encoder_2.setTarPWM(currentSpeed);
+  Encoder_1.setTarPWM(currentSpeed);
+  Encoder_2.setTarPWM(-currentSpeed);
 }
 
 void backward(int speed) {
   currentSpeed = constrain(speed, 0, 255);
-  Encoder_1.setTarPWM(currentSpeed);
-  Encoder_2.setTarPWM(-currentSpeed);
+  Encoder_1.setTarPWM(-currentSpeed);
+  Encoder_2.setTarPWM(currentSpeed);
 }
 
 void turnRight(int speed) {
