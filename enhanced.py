@@ -22,10 +22,10 @@ class EmotionalBehavior:
         self.motor = motor_controller
         self.motor_available = motor_controller is not None
         self.last_action_time = 0
-        self.idle_timer = 0
         self.attention_history = []  # Track attention over time
         self.emotion_history = []    # Track emotions over time
         self.interaction_level = 0   # 0-10 scale of how engaged the robot should be
+        self.serial_error_count = 0  # Track serial errors
         self.personality_traits = {
             "curiosity": 7,    # 1-10 scale
             "excitability": 6, # 1-10 scale
@@ -70,20 +70,88 @@ class EmotionalBehavior:
         else:  # No User state
             self.interaction_level = max(1, self.interaction_level - 0.1)  # Maintain minimal level
                 
-        # Increase idle timer when no one is watching
-        if attention_state == "No User":
-            self.idle_timer += 1
-        else:
-            self.idle_timer = max(0, self.idle_timer - 2)  # Reset idle timer faster when user appears
-                
         return self.interaction_level
-    
+
+    def _find_person_action(self, intensity=1.0):
+        """Execute a smoother search pattern to find people"""
+        print(f"Executing person-finding action (intensity: {intensity:.1f})")
+        if self.motor_available:
+            try:
+                # Calculate a slower, smoother rotation speed
+                rotation_speed = int(30 + intensity * 20)  # Lower speed for smoother motion
+                
+                # Perform a single smooth scan from left to right
+                # Start with left rotation
+                self.motor.left()
+                # Longer continuous rotation instead of stop-start
+                scan_time = 1.5 * intensity  # Longer scan time for smoother motion
+                time.sleep(scan_time)
+                self.motor.stop()
+                time.sleep(0.2)  # Brief pause
+                
+                # Then scan right
+                self.motor.right()
+                # Scan back with slightly longer time to cover full area
+                time.sleep(scan_time * 1.2)
+                self.motor.stop()
+                time.sleep(0.2)  # Brief pause
+                
+                # Return to center (half the time of right scan)
+                self.motor.left()
+                time.sleep((scan_time * 1.2) / 2)
+                self.motor.stop()
+                
+                self.serial_error_count = 0  # Reset error count on success
+            except serial.serialutil.SerialException as e:
+                self.serial_error_count += 1
+                print(f"Serial error during person-finding action: {e}")
+                if self.serial_error_count >= 3:
+                    print("Multiple serial errors detected - switching to simulation mode")
+                    self.motor_available = False
+                time.sleep(3.0 * intensity)  # Simulate action time even on error
+        else:
+            print(f"SIMULATED: Smoothly scanning for people")
+            time.sleep(3.0 * intensity)
+        return True
+
+    def approach_person(self, proximity=1.0):
+        """Move toward a detected person
+        
+        Args:
+            proximity: Float 0.0-1.0, where 1.0 means the person is far and 0.0 means very close
+        """
+        print(f"Approaching person (proximity factor: {proximity:.1f})")
+        if self.motor_available:
+            try:
+                # Move forward at a speed proportional to the distance
+                # When person is far (proximity near 1.0), move faster
+                # When person is close (proximity near 0.0), move slower or stop
+                if proximity > 0.3:  # Only approach if person isn't too close
+                    approach_speed = int(30 + proximity * 40)  # 30-70 speed range
+                    approach_time = min(1.5, proximity * 2.0)  # Maximum 1.5 seconds of movement
+                    
+                    self.motor.forward(approach_speed)
+                    time.sleep(approach_time)
+                    self.motor.stop()
+                    self.serial_error_count = 0  # Reset error count on success
+            except serial.serialutil.SerialException as e:
+                self.serial_error_count += 1
+                print(f"Serial error during person approach: {e}")
+                if self.serial_error_count >= 3:
+                    print("Multiple serial errors detected - switching to simulation mode")
+                    self.motor_available = False
+                time.sleep(min(1.5, proximity * 2.0))  # Simulate action time even on error
+        else:
+            print(f"SIMULATED: Approaching person at speed {int(30 + proximity * 40)} for {min(1.5, proximity * 2.0)} seconds")
+            time.sleep(min(1.5, proximity * 2.0))
+        return True
+
     def execute_action(self, action_type, intensity=1.0):
         """Execute a robot action with given intensity (0.0-1.0)"""
         current_time = time.time()
         
-        # Don't allow actions too frequently
-        if current_time - self.last_action_time < 3:
+        # Don't allow actions too frequently, except for follow actions which need to be continuous
+        if action_type != "follow_user" and current_time - self.last_action_time < 3:
             return False
             
         self.last_action_time = current_time
@@ -96,25 +164,34 @@ class EmotionalBehavior:
             return self._surprised_action(intensity)
         elif action_type == "seek_attention":
             return self._seek_attention_action(intensity)
-        elif action_type == "idle":
-            return self._idle_action()
+        elif action_type == "follow_user":  # Add this new action type
+            return self._follow_user_action(intensity)
         return False
     
     def _happy_action(self, intensity):
         print(f"Executing happy action (intensity: {intensity:.1f})")
         if self.motor_available:
-            # Small dance with intensity-based speed
-            speed = int(70 + (intensity * 30))
-            self.motor.forward(speed)
-            time.sleep(0.5 * intensity)
-            self.motor.stop()
-            time.sleep(0.2)
-            # Use left/right without speed parameter
-            self.motor.left()
-            time.sleep(0.3 * intensity)
-            self.motor.right()
-            time.sleep(0.3 * intensity)
-            self.motor.stop()
+            try:
+                # Small dance with intensity-based speed
+                speed = int(70 + (intensity * 30))
+                self.motor.forward(speed)
+                time.sleep(0.5 * intensity)
+                self.motor.stop()
+                time.sleep(0.2)
+                # Use left/right without speed parameter
+                self.motor.left()
+                time.sleep(0.3 * intensity)
+                self.motor.right()
+                time.sleep(0.3 * intensity)
+                self.motor.stop()
+                self.serial_error_count = 0  # Reset error count on success
+            except serial.serialutil.SerialException as e:
+                self.serial_error_count += 1
+                print(f"Serial error during happy action: {e}")
+                if self.serial_error_count >= 3:
+                    print("Multiple serial errors detected - switching to simulation mode")
+                    self.motor_available = False
+                time.sleep(1.0 * intensity)  # Simulate action time even on error
         else:
             print(f"SIMULATED: Happy dance with speed {int(70 + (intensity * 30))}")
             time.sleep(1.0 * intensity)
@@ -123,17 +200,26 @@ class EmotionalBehavior:
     def _curious_action(self, intensity):
         print(f"Executing curious action (intensity: {intensity:.1f})")
         if self.motor_available:
-            # Gentle forward movement with a subtle head tilt (if hardware supports it)
-            speed = int(40 + (intensity * 20))
-            self.motor.forward(speed)
-            time.sleep(0.6 * intensity)
-            self.motor.stop()
-            time.sleep(0.3)
-            self.motor.left()
-            time.sleep(0.2)
-            self.motor.right()
-            time.sleep(0.2)
-            self.motor.stop()
+            try:
+                # Gentle forward movement with a subtle head tilt (if hardware supports it)
+                speed = int(40 + (intensity * 20))
+                self.motor.forward(speed)
+                time.sleep(0.6 * intensity)
+                self.motor.stop()
+                time.sleep(0.3)
+                self.motor.left()
+                time.sleep(0.2)
+                self.motor.right()
+                time.sleep(0.2)
+                self.motor.stop()
+                self.serial_error_count = 0  # Reset error count on success
+            except serial.serialutil.SerialException as e:
+                self.serial_error_count += 1
+                print(f"Serial error during curious action: {e}")
+                if self.serial_error_count >= 3:
+                    print("Multiple serial errors detected - switching to simulation mode")
+                    self.motor_available = False
+                time.sleep(1.0 * intensity)  # Simulate action time even on error
         else:
             print(f"SIMULATED: Curious investigation at speed {int(40 + (intensity * 20))}")
             time.sleep(1.0 * intensity)
@@ -142,16 +228,25 @@ class EmotionalBehavior:
     def _surprised_action(self, intensity):
         print(f"Executing surprised action (intensity: {intensity:.1f})")
         if self.motor_available:
-            # Quick backward motion
-            speed = int(50 + (intensity * 50))
-            self.motor.backward(speed)
-            time.sleep(0.3 * intensity)
-            self.motor.stop()
-            time.sleep(0.2)
-            # Then small motion forward (like recovering from surprise)
-            self.motor.forward(30)
-            time.sleep(0.2)
-            self.motor.stop()
+            try:
+                # Quick backward motion
+                speed = int(50 + (intensity * 50))
+                self.motor.backward(speed)
+                time.sleep(0.3 * intensity)
+                self.motor.stop()
+                time.sleep(0.2)
+                # Then small motion forward (like recovering from surprise)
+                self.motor.forward(30)
+                time.sleep(0.2)
+                self.motor.stop()
+                self.serial_error_count = 0  # Reset error count on success
+            except serial.serialutil.SerialException as e:
+                self.serial_error_count += 1
+                print(f"Serial error during surprised action: {e}")
+                if self.serial_error_count >= 3:
+                    print("Multiple serial errors detected - switching to simulation mode")
+                    self.motor_available = False
+                time.sleep(0.5 * intensity)  # Simulate action time even on error
         else:
             print(f"SIMULATED: Surprised reaction at speed {int(50 + (intensity * 50))}")
             time.sleep(0.5 * intensity)
@@ -160,52 +255,70 @@ class EmotionalBehavior:
     def _seek_attention_action(self, intensity):
         print(f"Executing attention-seeking action (intensity: {intensity:.1f})")
         if self.motor_available:
-            # Series of movements to attract attention
-            for _ in range(int(1 + intensity * 2)):
-                direction = random.choice(["left", "right"])
-                if direction == "left":
-                    self.motor.left()
-                else:
-                    self.motor.right()
-                time.sleep(0.3)
+            try:
+                # Series of movements to attract attention
+                for _ in range(int(1 + intensity * 2)):
+                    direction = random.choice(["left", "right"])
+                    if direction == "left":
+                        self.motor.left()
+                    else:
+                        self.motor.right()
+                    time.sleep(0.3)
+                    self.motor.stop()
+                    time.sleep(0.2)
+                
+                # Small forward movement
+                self.motor.forward(50)
+                time.sleep(0.5)
                 self.motor.stop()
-                time.sleep(0.2)
-            
-            # Small forward movement
-            self.motor.forward(50)
-            time.sleep(0.5)
-            self.motor.stop()
+                self.serial_error_count = 0  # Reset error count on success
+            except serial.serialutil.SerialException as e:
+                self.serial_error_count += 1
+                print(f"Serial error during attention-seeking action: {e}")
+                if self.serial_error_count >= 3:
+                    print("Multiple serial errors detected - switching to simulation mode")
+                    self.motor_available = False
+                time.sleep(1.5 * intensity)  # Simulate action time even on error
         else:
             print(f"SIMULATED: Seeking attention with {int(1 + intensity * 2)} movements")
             time.sleep(1.5 * intensity)
         return True
-    
-    def _idle_action(self):
-        # Random idle behaviors when no one is watching for a while
-        if self.idle_timer > 100:  # After about 10 seconds of no attention
-            action = random.choice(["stretch", "look_around", "sleep"])
-            print(f"Executing idle action: {action}")
-            
-            if action == "stretch" and self.motor_available:
-                self.motor.forward(30)
-                time.sleep(0.3)
-                self.motor.backward(30)
-                time.sleep(0.3)
-                self.motor.stop()
-            elif action == "look_around" and self.motor_available:
-                self.motor.left()
-                time.sleep(0.5)
-                self.motor.right()
-                time.sleep(0.5)
-                self.motor.stop()
-            else:
-                # Sleep mode - do nothing special
-                pass
-                
-            self.idle_timer = 50  # Reset timer partially so it performs idle actions periodically
-            return True
-        return False
+
+    def _follow_user_action(self, intensity=1.0):
+        """
+        Execute actions to follow a person
         
+        Args:
+            intensity: Float 0.0-1.0, controls speed and responsiveness
+        """
+        print(f"Following user (intensity: {intensity:.1f})")
+        if self.motor_available:
+            try:
+                # Move forward at a moderate speed
+                follow_speed = int(40 + intensity * 20)  # 40-60 speed range
+                
+                # Brief forward motion
+                self.motor.forward(follow_speed)
+                time.sleep(0.3)  # Short movement to avoid overshooting
+                self.motor.stop()
+                
+                self.serial_error_count = 0  # Reset error count on success
+            except serial.serialutil.SerialException as e:
+                self.serial_error_count += 1
+                print(f"Serial error during follow action: {e}")
+                if self.serial_error_count >= 3:
+                    print("Multiple serial errors detected - switching to simulation mode")
+                    self.motor_available = False
+                time.sleep(0.3)  # Simulate action time even on error
+        else:
+            print(f"SIMULATED: Following user at speed {int(40 + intensity * 20)}")
+            time.sleep(0.3)
+        return True
+    
+        
+# Import serial module for exception handling
+import serial
+
 # Initialize MediaPipe Face Detection and Hand solutions
 mp_face_detection = mp.solutions.face_detection
 mp_hands = mp.solutions.hands
@@ -233,8 +346,14 @@ face_mesh = mp_face_mesh.FaceMesh(
     min_tracking_confidence=0.5
 )
 
-# Initialize behavior controller
-behavior = EmotionalBehavior(emo if motor_available else None)
+# Initialize behavior controller with error handling for serial connection
+try:
+    behavior = EmotionalBehavior(emo if motor_available else None)
+    print("Behavior controller initialized successfully")
+except Exception as e:
+    print(f"Error initializing behavior controller: {e}")
+    behavior = EmotionalBehavior(None)
+    print("Falling back to simulation mode")
 
 # Start webcam
 cap = cv2.VideoCapture(0)
@@ -435,7 +554,43 @@ def is_user_watching(detection, mesh_results, frame_shape):
         return final_score > 0.45  # Lowered from 0.6
     
     return False
-
+def estimate_distance(face_box):
+    """
+    Estimates the distance to a face based on the bounding box size.
+    
+    Args:
+        face_box: The bounding box from MediaPipe face detection
+        
+    Returns:
+        (float, str): A tuple containing:
+            - distance_estimate: A value between 0.0-1.0 where 0.0 is very close and 1.0 is far
+            - distance_category: A string label ("Near", "Medium", "Far")
+    """
+    # Calculate the area of the face box as a percentage of the entire frame
+    face_area = face_box.width * face_box.height
+    
+    # Convert area to distance estimate (inverted, so 0.0 is close and 1.0 is far)
+    # We use a non-linear mapping to improve sensitivity at different distances
+    if face_area > 0.25:  # Very large face (more than 25% of frame)
+        distance_estimate = 0.0
+        distance_category = "Very Near"
+    elif face_area > 0.1:  # Large face (10-25% of frame)
+        # Map 0.1-0.25 to 0.2-0.0 range
+        distance_estimate = 0.2 - ((face_area - 0.1) * 0.8)
+        distance_category = "Near"
+    elif face_area > 0.03:  # Medium face (3-10% of frame)
+        # Map 0.03-0.1 to 0.6-0.2 range
+        distance_estimate = 0.6 - ((face_area - 0.03) * 5.7)
+        distance_category = "Medium"
+    elif face_area > 0.005:  # Small face (0.5-3% of frame)
+        # Map 0.005-0.03 to 0.9-0.6 range
+        distance_estimate = 0.9 - ((face_area - 0.005) * 12)
+        distance_category = "Far"
+    else:  # Very small face (less than 0.5% of frame)
+        distance_estimate = 1.0
+        distance_category = "Very Far"
+    
+    return distance_estimate, distance_category
 # Enhanced emotion detection class for more accurate and varied emotions
 class EmotionDetector:
     def __init__(self):
@@ -674,6 +829,21 @@ behavior_cooldown = 5.0  # seconds between automatic behaviors
 last_attention_seeking_time = 0
 attention_seeking_threshold = 30.0  # seconds without attention before seeking it
 
+# Add your new variables here:
+person_search_cooldown = 15.0  # Seconds between active searches
+last_person_search_time = 0
+person_search_mode = False
+consecutive_no_detection = 0
+face_position_x = None
+face_size = None  # To track approximate distance to person
+last_person_approach_time = 0
+person_approach_cooldown = 8.0  # Seconds between approach actions
+
+following_mode = False
+following_start_time = None
+follow_check_interval = 0.5  # Check conditions every half second
+last_follow_check = 0
+
 while True:
     ret, frame = cap.read()
     if not ret:
@@ -813,13 +983,27 @@ while True:
                     if current_time - behavior.last_action_time > 3:
                         threading.Thread(target=behavior.execute_action, 
                                        args=("curious", 0.8)).start()
+            
+            # Check for "Open Hand" gesture to trigger following mode
+            if gesture_result["static"] == "Open Hand" and attention_state == "Watching":
+                current_time = time.time()
+                
+                # Check if we should enter following mode
+                if not following_mode:
+                    print("Open hand detected - activating following mode")
+                    following_mode = True
+                    following_start_time = current_time
+                    # Flash status as visual indicator that following mode is activated
+                    status_bar[:] = (0, 255, 255)  # Yellow flash
+                    
+                # Reset the timer while hand remains open
+                last_follow_check = current_time
     
-    # Behavior decision making
-    # Replace the current behavior decision making section with this improved version
-    # Behavior decision making (improved engagement response)
-    # Behavior decision making
+    # Behavior decision making with person finding
     if attention_state == "Watching":
-        # Reset attention seeking timer when watched
+        # Reset counters and timers when being watched
+        consecutive_no_detection = 0
+        person_search_mode = False
         last_attention_seeking_time = current_time
         
         # Increase responsiveness to direct watching
@@ -829,61 +1013,212 @@ while True:
         else:
             behavior.watching_start_time = current_time
         
-        # React immediately when someone starts watching (first 2 seconds)
-        if watching_duration < 2 and current_time - behavior.last_action_time > 2:
-            print("User just started watching - immediate greeting")
-            intensity = min(0.7, 0.4 + (interaction_level / 20))
-            threading.Thread(target=behavior.execute_action, 
-                        args=("happy", intensity)).start()
+        # Calculate face position and size when face is detected
+        if face_results.detections:
+            detection = face_results.detections[0]  # Use first detected face
+            face_box = detection.location_data.relative_bounding_box
+            frame_height, frame_width, _ = frame.shape
+            
+            # Calculate face center position (0.0-1.0 range)
+            face_center_x = face_box.xmin + (face_box.width / 2)
+            face_position_x = face_center_x
+            
+            # Calculate face size as proportion of frame (proxy for distance)
+            face_size = face_box.width * face_box.height
+            
+            # Estimate distance to face
+            distance_estimate, distance_category = estimate_distance(face_box)
+            
+            # Display distance estimation on frame
+            dist_text = f"Distance: {distance_category} ({distance_estimate:.2f})"
+            cv2.putText(frame, dist_text, (10, frame_height - 50), 
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+            
+            # Only approach if not in following mode
+            if not following_mode:
+                # Decide if we should approach the person (not too close already and cooldown passed)
+                if (distance_estimate > 0.3 and  # Not too close
+                    current_time - last_person_approach_time > person_approach_cooldown):
+                    
+                    # Only approach when person is centered
+                    if 0.25 < face_position_x < 0.75:
+                        print(f"Person detected, approaching (distance: {distance_category}, factor: {distance_estimate:.2f})")
+                        threading.Thread(target=behavior.approach_person, 
+                                      args=(distance_estimate,)).start()
+                        last_person_approach_time = current_time
+                
+                # If person is off-center, rotate to center them
+                elif (current_time - behavior.last_action_time > 3 and
+                      (face_position_x < 0.25 or face_position_x > 0.75)):
+                    
+                    if face_position_x < 0.25:  # Person is to the left
+                        if behavior.motor_available:
+                            behavior.motor.left()
+                            time.sleep(0.2)
+                            behavior.motor.stop()
+                        else:
+                            print("SIMULATED: Turning left to center person")
+                    else:  # Person is to the right
+                        if behavior.motor_available:
+                            behavior.motor.right()
+                            time.sleep(0.2)
+                            behavior.motor.stop()
+                        else:
+                            print("SIMULATED: Turning right to center person")
+                    
+                    behavior.last_action_time = current_time
         
-        # Periodic engagement while being watched
-        elif watching_duration > 5 and current_time - behavior.last_action_time > 7:
-            # Choose an action based on detected emotion and personality
-            if "Happy" in active_emotions:
-                print("Responding to happy user with happy action")
+        # Only run emotional responses if not in following mode
+        if not following_mode:
+            # React immediately when someone starts watching (first 2 seconds)
+            if watching_duration < 2 and current_time - behavior.last_action_time > 2:
+                print("User just started watching - immediate greeting")
+                intensity = min(0.7, 0.4 + (interaction_level / 20))
                 threading.Thread(target=behavior.execute_action, 
-                            args=("happy", min(0.9, emotion_result["confidence"]))).start()
-            elif "Surprised" in active_emotions:
-                print("Responding to surprised user")
-                threading.Thread(target=behavior.execute_action, 
-                            args=("surprised", min(0.8, emotion_result["confidence"]))).start()
-            else:
-                # Random curious actions while being watched
-                if random.random() < 0.3:  # 30% chance for a subtle movement
-                    print("Curious response to watching user")
+                              args=("happy", intensity)).start()
+            
+            # Periodic engagement while being watched
+            elif watching_duration > 5 and current_time - behavior.last_action_time > 7:
+                # Choose an action based on detected emotion and personality
+                if "Happy" in active_emotions:
+                    print("Responding to happy user with happy action")
                     threading.Thread(target=behavior.execute_action, 
-                                args=("curious", 0.5)).start()
-                
-        # React to strong emotions (kept from original)
-        elif emotion_result["dominant"] == "Happy" and emotion_result["confidence"] > 0.6:
-            if current_time - behavior.last_action_time > 5:
-                threading.Thread(target=behavior.execute_action, 
-                            args=("happy", emotion_result["confidence"])).start()
-                
-        elif emotion_result["dominant"] == "Surprised" and emotion_result["confidence"] > 0.7:
-            if current_time - behavior.last_action_time > 5:
-                threading.Thread(target=behavior.execute_action, 
-                            args=("surprised", emotion_result["confidence"])).start()
+                                  args=("happy", min(0.9, emotion_result["confidence"]))).start()
+                elif "Surprised" in active_emotions:
+                    print("Responding to surprised user")
+                    threading.Thread(target=behavior.execute_action, 
+                                  args=("surprised", min(0.8, emotion_result["confidence"]))).start()
+                else:
+                    # Random curious actions while being watched
+                    if random.random() < 0.3:  # 30% chance for a subtle movement
+                        print("Curious response to watching user")
+                        threading.Thread(target=behavior.execute_action, 
+                                      args=("curious", 0.5)).start()
+                    
+            # React to strong emotions (kept from original)
+            elif emotion_result["dominant"] == "Happy" and emotion_result["confidence"] > 0.6:
+                if current_time - behavior.last_action_time > 5:
+                    threading.Thread(target=behavior.execute_action, 
+                                  args=("happy", emotion_result["confidence"])).start()
+                    
+            elif emotion_result["dominant"] == "Surprised" and emotion_result["confidence"] > 0.7:
+                if current_time - behavior.last_action_time > 5:
+                    threading.Thread(target=behavior.execute_action, 
+                                  args=("surprised", emotion_result["confidence"])).start()
 
     elif attention_state == "Not Watching":
         # Reset watching timer when no longer watching
         if hasattr(behavior, 'watching_start_time'):
             delattr(behavior, 'watching_start_time')
         
-        # Occasionally try to regain attention
-        if (current_time - last_attention_seeking_time > attention_seeking_threshold and
-            current_time - behavior.last_action_time > behavior_cooldown):
-            threading.Thread(target=behavior.execute_action, 
-                        args=("seek_attention", 0.5)).start()
-            last_attention_seeking_time = current_time
+        # Exit following mode if active
+        if following_mode:
+            print("Exiting following mode - user not watching")
+            following_mode = False
+        
+        # If we detect a face but they're not watching,
+        # this means someone is present but not engaging
+        if face_results.detections:
+            consecutive_no_detection = 0
+            
+            # Occasionally try to regain attention
+            if (current_time - last_attention_seeking_time > attention_seeking_threshold and
+                current_time - behavior.last_action_time > behavior_cooldown):
+                threading.Thread(target=behavior.execute_action, 
+                              args=("seek_attention", 0.5)).start()
+                last_attention_seeking_time = current_time
+        else:
+            # No face detected despite being in "not watching" state
+            # This can happen if the face moved out of frame
+            consecutive_no_detection += 1
+            
+            # After a few frames with no detection, switch to search mode
+            if consecutive_no_detection > 15:  # About half a second at 30fps
+                person_search_mode = True
 
-    else:  # No User
+    else:  # No User state
         # Reset watching timer when no user
         if hasattr(behavior, 'watching_start_time'):
             delattr(behavior, 'watching_start_time')
+            
+        # Exit following mode if active
+        if following_mode:
+            print("Exiting following mode - no user detected")
+            following_mode = False
+        
+        # Increment the no-detection counter
+        consecutive_no_detection += 1
+        
+        # After continuous no detection, enter search mode
+        if consecutive_no_detection > 30:  # About 1 second at 30fps
+            person_search_mode = True
         
         # Execute idle behaviors
         behavior.execute_action("idle")
+
+    # Person search mode activation
+    if person_search_mode and not following_mode:  # Don't search if following
+        # Check if search cooldown has elapsed
+        if current_time - last_person_search_time > person_search_cooldown:
+            print("No person detected for a while, starting search pattern")
+            threading.Thread(target=behavior._find_person_action, 
+                          args=(0.7,)).start()
+            last_person_search_time = current_time
+            person_search_mode = False  # Reset search mode after initiating search
+
+    # Execute following behavior if in following mode
+    if following_mode:
+        # Update the status bar to show following mode is active
+        cv2.putText(frame, "FOLLOWING MODE", (frame.shape[1] - 200, 30), 
+                  cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                  
+        # Check if it's time to verify conditions still hold
+        if current_time - last_follow_check > follow_check_interval:
+            # If hand isn't open anymore or user not watching, exit following mode
+            if not (hand_results.multi_hand_landmarks and 
+                    attention_state == "Watching"):
+                print("Exiting following mode - hand gesture changed or user not watching")
+                following_mode = False
+            last_follow_check = current_time
+        
+        # Only execute following behavior if face is detected
+        if face_results.detections:
+            detection = face_results.detections[0]
+            face_box = detection.location_data.relative_bounding_box
+            
+            # Update face position variables
+            face_center_x = face_box.xmin + (face_box.width / 2)
+            face_position_x = face_center_x
+            
+            # Estimate distance
+            distance_estimate, _ = estimate_distance(face_box)
+            
+            # Log the current following state occasionally
+            if frame_count % 30 == 0:  # Log once per second at 30fps
+                print(f"Following mode active - distance: {distance_estimate:.2f}, position: {face_position_x:.2f}")
+            
+            # First, rotate to center the person if needed
+            if face_position_x < 0.3:  # Person is too far left
+                if behavior.motor_available:
+                    behavior.motor.left()
+                    time.sleep(0.2)
+                    behavior.motor.stop()
+                else:
+                    print("SIMULATED: Turning left to center person while following")
+            elif face_position_x > 0.7:  # Person is too far right
+                if behavior.motor_available:
+                    behavior.motor.right()
+                    time.sleep(0.2)
+                    behavior.motor.stop()
+                else:
+                    print("SIMULATED: Turning right to center person while following")
+            # Then move forward if person is centered and not too close
+            elif 0.3 <= face_position_x <= 0.7 and distance_estimate > 0.25:
+                # Execute follow action with intensity based on distance
+                # Closer = slower, farther = faster
+                follow_intensity = min(0.9, distance_estimate * 1.2)
+                threading.Thread(target=behavior.execute_action, 
+                              args=("follow_user", follow_intensity)).start()
 
     # Combine status bar and frame
     display_frame = np.vstack([status_bar, frame])
@@ -897,12 +1232,3 @@ while True:
     # Break on 'q' key press
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
-
-# Release resources
-cap.release()
-cv2.destroyAllWindows()
-
-# Safety measure - ensure motors are stopped when program exits
-if motor_available:
-    emo.stop()
-    print("Motors stopped on exit")
