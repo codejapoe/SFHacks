@@ -3,16 +3,20 @@
 // Encoder setup
 MeEncoderOnBoard Encoder_1(SLOT1);
 MeEncoderOnBoard Encoder_2(SLOT2);
-// Ultrasonic sensor setup on PORT_6 (as per previous request)
+// Ultrasonic sensor setup - Using PORT_10 as in your buggy code
+// Ensure the sensor is actually plugged into PORT_10.
 MeUltrasonicSensor ultrasonic_sensor(PORT_10);
 
-// Variables
-bool systemActive = true;    // System always active by default
-int currentSpeed = 100;      // Current motor speed (0-255)
-unsigned long lastActivityTime = 0;
+// --- Configuration ---
+const float STOP_DISTANCE_CM = 20.0; // Stop if closer than 20cm
 const unsigned long WATCHDOG_TIMEOUT = 15000;  // 15 second timeout
 
-// Forward declarations of functions to fix scope issues
+// Variables
+int currentSpeed = 100;      // Default motor speed (0-255) for commands without explicit speed
+unsigned long lastActivityTime = 0;
+bool isStoppedByObstacle = false; // Flag to track if we stopped due to distance
+
+// Forward declarations
 void forward(int speed = 100);
 void backward(int speed = 100);
 void turnLeft(int speed = 100);
@@ -28,209 +32,175 @@ void setup() {
   TCCR2A = _BV(WGM21) | _BV(WGM20);
   TCCR2B = _BV(CS21);
 
-  // Start hardware serial (baud rate from previous examples)
+  // Start hardware serial
   Serial.begin(115200);
 
   // Initial state
-  stopMotors();
+  stopMotors(); // Use the modified stopMotors for immediate effect
 
   Serial.println("BOOT:READY");
-  Serial.println("System is ACTIVE by default");
-  Serial.println("Added 'U' command for Ultrasonic distance."); // Info message
+  Serial.println("Obstacle Avoidance Active.");
+  Serial.print("Stop Distance: "); Serial.print(STOP_DISTANCE_CM); Serial.println(" cm");
 
   lastActivityTime = millis();
 }
 
 void loop() {
-  // Check for watchdog timeout
+  // --- 1. Check for Obstacle ---
+  float distance = ultrasonic_sensor.distanceCm(); // Read current distance
+
+  // Use range from document (3cm-400cm), treat < 3cm as very close
+  if (distance < STOP_DISTANCE_CM && distance >= 0) { // Check if too close (and reading is valid)
+    if (!isStoppedByObstacle) { // Only print and stop if not already stopped by obstacle
+       Serial.print("OBSTACLE! Distance: "); Serial.print(distance); Serial.println(" cm. Stopping.");
+       stopMotors(); // Force stop using immediate PWM command
+       isStoppedByObstacle = true; // Set the flag
+    }
+    // We don't process commands or run encoder loops if stopped by obstacle
+    lastActivityTime = millis(); // Keep watchdog happy while stopped
+    delay(50); // Small delay to prevent spamming stop command
+    return; // Skip the rest of the loop
+  }
+  else {
+     // If we were stopped by an obstacle but it's now clear
+     if (isStoppedByObstacle) {
+        Serial.println("Obstacle Cleared. Resuming.");
+        isStoppedByObstacle = false; // Clear the flag
+        // Motors remain stopped until a new command is received.
+        // Or optionally, you could resume the last command here if needed (more complex).
+     }
+  }
+
+  // --- 2. Watchdog Check (only if not stopped by obstacle) ---
   if (millis() - lastActivityTime > WATCHDOG_TIMEOUT) {
     Serial.println("WATCHDOG: Timeout - stopping motors");
     stopMotors();
     lastActivityTime = millis(); // Reset the timer
   }
 
-  // Check for serial commands
+  // --- 3. Process Serial Commands (only if not stopped by obstacle) ---
   if (Serial.available()) {
-    // Read only the first character as the command
     char command = Serial.read();
-    // Consume any remaining characters on the line (like newline)
-    while(Serial.available() && Serial.peek() != '\n') {
-        Serial.read();
-    }
-    if(Serial.peek() == '\n') Serial.read(); // Read the newline too
-
-    // For commands needing a value, it would need a different parsing logic.
-    // For now, value is unused for letter commands based on original code.
-    int value = 0; // Reset value, not used for U command
+    while(Serial.available() && Serial.peek() != '\n') { Serial.read(); }
+    if(Serial.peek() == '\n') Serial.read();
+    int value = 0; // Value parsing would need more logic if used with numeric commands
 
     processCommand(command, value);
+    // Don't reset lastActivityTime here, processCommand does it
   }
 
-  // Required for encoder operation using setTarPWM
+  // --- 4. Run Encoder Loops (only if not stopped by obstacle) ---
+  // Required for setTarPWM to work when a command IS active
   Encoder_1.loop();
   Encoder_2.loop();
 
-  // Optionally print speed data (can be commented out if not needed)
+  // Optional Debugging - print speed etc. (only if not stopped by obstacle)
   static unsigned long lastPrintTime = 0;
-  if (millis() - lastPrintTime > 1000) {  // Print once per second
-    // Serial.print("Speed 1: "); // Commented out to reduce noise, enable if needed
-    // Serial.print(Encoder_1.getCurrentSpeed());
-    // Serial.print(" ,Speed 2: ");
-    // Serial.println(Encoder_2.getCurrentSpeed());
+  if (millis() - lastPrintTime > 1000) {
+    // Serial.print("Current Target Speed Var: "); Serial.println(currentSpeed);
+    // Add other debug info if needed
     lastPrintTime = millis();
   }
 }
 
+// Process commands received via Serial
 void processCommand(char command, int value) {
-  lastActivityTime = millis();  // Reset watchdog timer
-  String response = ""; // Initialize response string
+  lastActivityTime = millis(); // Reset watchdog timer on any valid command attempt
+  String response = "";
 
-  // Echo command for verification (optional, can be noisy)
-  // Serial.print("CMD RX: ");
-  // Serial.println(command);
-
-  // Process numeric commands from original Auriga code
-  // Note: Your original code read a value AFTER the command character.
-  // Numeric commands might need adjusted parsing if used alongside single-char commands.
-  // For simplicity, this keeps the structure but value is ignored for 'U'.
-  if (command >= '0' && command <= '8') {
-    switch (command) {
-      case '0': // Stop
-        stopMotors();
-        response = "ACK:STOP";
-        break;
-      // Note: The value parsing logic might need refinement if you send e.g. "1 60"
-      case '1': // Back slow
-        backward(value > 0 ? value : 60); // Using value if provided, else default
-        response = "ACK:BWD:SLOW:" + String(value > 0 ? value : 60);
-        break;
-      case '2': // Back medium
-        backward(100);
-        response = "ACK:BWD:MED";
-        break;
-      case '3': // Back fast
-        backward(150); // Increased speed slightly for distinction
-        response = "ACK:BWD:FAST";
-        break;
-      case '4': // Forward slow
-        forward(60);
-        response = "ACK:FWD:SLOW";
-        break;
-      case '5': // Forward medium
-        forward(100);
-        response = "ACK:FWD:MED";
-        break;
-      case '6': // Forward fast
-        forward(150); // Increased speed slightly for distinction
-        response = "ACK:FWD:FAST";
-        break;
-      case '7': // Left slow
-        turnLeft(80); // Slightly slower turn for control
-        response = "ACK:LEFT";
-        break;
-      case '8': // Right slow
-        turnRight(80); // Slightly slower turn for control
-        response = "ACK:RIGHT";
-        break;
-      default:
-         response = "ERR:INVALID_NUM"; // Should not happen with check '0'-'8'
-         break;
-    }
+  // Cannot process movement commands if stopped by obstacle
+  if (isStoppedByObstacle) {
+      Serial.println("WARN: Cannot process command while stopped by obstacle.");
+      return; // Exit function early
   }
-  // Additional letter-based commands
+
+  command = toupper(command); // Make command case-insensitive
+
+  // Handle movement commands (F, B, L, R, 0-8)
+  if (String("FBLR012345678").indexOf(command) != -1) {
+      Serial.print("CMD RX: "); Serial.println(command); // Acknowledge command reception
+      switch (command) {
+          case 'F': forward(); response = "ACK:FWD"; break;
+          case 'B': backward(); response = "ACK:BWD"; break;
+          case 'L': turnLeft(); response = "ACK:LEFT"; break;
+          case 'R': turnRight(); response = "ACK:RIGHT"; break;
+          // Numeric commands (simplified, may need value parsing adjustments)
+          case '0': stopMotors(); response = "ACK:STOP"; break;
+          case '1': backward(60); response = "ACK:BWD:S"; break;
+          case '2': backward(100); response = "ACK:BWD:M"; break;
+          case '3': backward(150); response = "ACK:BWD:F"; break;
+          case '4': forward(60); response = "ACK:FWD:S"; break;
+          case '5': forward(100); response = "ACK:FWD:M"; break;
+          case '6': forward(150); response = "ACK:FWD:F"; break;
+          case '7': turnLeft(80); response = "ACK:LEFT:S"; break;
+          case '8': turnRight(80); response = "ACK:RIGHT:S"; break;
+      }
+  }
+  // Handle non-movement commands
   else {
-    // Convert command to uppercase for case-insensitivity
-    command = toupper(command);
-
-    switch (command) {
-      case 'F': // Forward
-        forward();
-        response = "ACK:FWD";
-        break;
-      case 'B': // Backward
-        backward();
-        response = "ACK:BWD";
-        break;
-      case 'L': // Left
-        turnLeft();
-        response = "ACK:LEFT";
-        break;
-      case 'R': // Right
-        turnRight();
-        response = "ACK:RIGHT";
-        break;
-      case 'S': // Stop
-        stopMotors();
-        response = "ACK:STOP";
-        break;
-
-      // --- NEW: Ultrasonic Command ---
-      case 'U':
-        { // Use braces to create a local scope for the distance variable
-          float distance = ultrasonic_sensor.distanceCm(); // Read distance using the function from the doc
-          response = "DIST:"; // Start response string
-          response += String(distance); // Append distance value
-          response += "cm"; // Append unit
-        }
-        break;
-      // --- End of New Command ---
-
-      case 'X': // Status indicator (keep as is)
-        response = "ACK:SYS:ON";
-        break;
-      case '?': // Status (keep as is)
-        response = "STAT:ON:SPD:" + String(map(currentSpeed, 50, 150, 0, 9)); // Adjusted speed range mapping
-        break;
-      default:
-        response = "ERR:INVALID_CMD"; // Error for unknown letter commands
-        break;
-    }
+      switch (command) {
+          case 'S': // Explicit Stop command
+              Serial.print("CMD RX: "); Serial.println(command);
+              stopMotors();
+              response = "ACK:STOP";
+              break;
+          // Removed 'U' command for distance, as it's now checked continuously
+          case 'X': // Status indicator
+              response = "ACK:SYS:ON";
+              break;
+          case '?': // Status
+              response = "STAT:ON:SPD_VAR:" + String(currentSpeed); // Report speed variable
+              break;
+          default:
+              response = "ERR:INVALID_CMD";
+              break;
+      }
   }
 
-  // Log response to serial for debugging/confirmation
   if (response.length() > 0) {
       Serial.println(response);
   }
 }
 
 // --- Motor control functions ---
-// Using setTarPWM based on your original code which smoothly ramps speed.
-// setTarPWM requires Encoder_1.loop() and Encoder_2.loop() in the main loop.
-// Signs adjusted for typical differential drive forward/backward/turn
+// These now only SET the target PWM. The loop's distance check can override them.
 void forward(int speed) {
   currentSpeed = constrain(speed, 0, 255);
-  Encoder_1.setTarPWM(-currentSpeed); // Motor 1 backward relative to chassis
-  Encoder_2.setTarPWM(currentSpeed);  // Motor 2 forward relative to chassis
+  Encoder_1.setTarPWM(-currentSpeed);
+  Encoder_2.setTarPWM(currentSpeed);
 }
 
 void backward(int speed) {
   currentSpeed = constrain(speed, 0, 255);
-  Encoder_1.setTarPWM(currentSpeed);  // Motor 1 forward
-  Encoder_2.setTarPWM(-currentSpeed); // Motor 2 backward
+  Encoder_1.setTarPWM(currentSpeed);
+  Encoder_2.setTarPWM(-currentSpeed);
 }
 
-void turnRight(int speed) { // Turn in place to the right
+void turnRight(int speed) {
   currentSpeed = constrain(speed, 0, 255);
-  Encoder_1.setTarPWM(-currentSpeed); // Motor 1 backward
-  Encoder_2.setTarPWM(-currentSpeed); // Motor 2 backward (relative to chassis, pushes right side forward)
+  Encoder_1.setTarPWM(-currentSpeed);
+  Encoder_2.setTarPWM(-currentSpeed);
 }
 
-void turnLeft(int speed) { // Turn in place to the left
+void turnLeft(int speed) {
   currentSpeed = constrain(speed, 0, 255);
-  Encoder_1.setTarPWM(currentSpeed); // Motor 1 forward
-  Encoder_2.setTarPWM(currentSpeed); // Motor 2 forward (relative to chassis, pushes left side forward)
+  Encoder_1.setTarPWM(currentSpeed);
+  Encoder_2.setTarPWM(currentSpeed);
 }
 
+// --- IMMEDIATE Motor Stop Function ---
 void stopMotors() {
-  Encoder_1.setTarPWM(0); // Target PWM = 0
+  // Use setMotorPwm for immediate stop, overriding any setTarPWM ramp.
+  // This is crucial for obstacle avoidance.
+  Encoder_1.setMotorPwm(0);
+  Encoder_2.setMotorPwm(0);
+  // Also reset the target PWM in case the obstacle clears
+  Encoder_1.setTarPWM(0);
   Encoder_2.setTarPWM(0);
-  // It might take a moment to ramp down with setTarPWM.
-  // For an immediate stop, you could use:
-  // Encoder_1.setMotorPwm(0);
-  // Encoder_2.setMotorPwm(0);
+  // Serial.println("DEBUG: stopMotors() called (setMotorPwm(0))"); // Optional debug
 }
 
-// This function only updates the variable, doesn't change motor state directly
+// Function to set the speed variable (doesn't move motors directly)
 void setSpeed(int speed) {
   currentSpeed = constrain(speed, 0, 255);
   Serial.print("INFO: Speed variable set to "); Serial.println(currentSpeed);
