@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:robot_control_center/pages/login_page.dart';
 import 'package:robot_control_center/pages/robot_id_page.dart';
 import 'package:robot_control_center/pages/control_center_page.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await dotenv.load(fileName: '.env');
   runApp(const EmoRoboApp());
 }
 

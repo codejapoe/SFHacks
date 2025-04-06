@@ -1,8 +1,10 @@
 import 'package:google_generative_ai/google_generative_ai.dart';
 import 'dart:io';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 class GeminiService {
-  static const String _apiKey = 'AIzaSyA5HZcwQEbDhBcZNbLaQAAiTW5rRS04cIs';
+  // Get API key from environment variables
+  static final String _apiKey = dotenv.env['GEMINI_API_KEY'] ?? '';
   static final model = GenerativeModel(
     model: 'gemini-2.0-flash',
     apiKey: _apiKey,
@@ -10,6 +12,12 @@ class GeminiService {
 
   static Future<String> getResponse(String prompt) async {
     try {
+      // Check if API key is available
+      if (_apiKey.isEmpty) {
+        print('❌ Gemini API key not found in environment variables');
+        return 'Sorry, there was an error with my configuration.';
+      }
+
       final systemInstruction = Content.text(
         'You are a emotional robot companion named Emo. Your creators are Inky, Codejapoe, Elija. Your response must be as short as possible, friendly, and casual no more than 20 words.'
       );
