@@ -11,7 +11,7 @@ class GeminiService {
   static Future<String> getResponse(String prompt) async {
     try {
       final systemInstruction = Content.text(
-        'You are a emotional robot companion named Emo. Your response must be short, friendly, and casual no more than one sentence.'
+        'You are a emotional robot companion named Emo. Your creators are Inky, Codejapoe, Elija. Your response must be as short as possible, friendly, and casual no more than 20 words.'
       );
       
       final content = Content.text(prompt);

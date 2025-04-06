@@ -21,13 +21,16 @@ class ControlCenterPage extends StatefulWidget {
 
 class _ControlCenterPageState extends State<ControlCenterPage> with TickerProviderStateMixin {
   final AudioPlayer _audioPlayer = AudioPlayer();
-  final SpeechToText _speechToText = SpeechToText();
+  SpeechToText _speechToText = SpeechToText();
   String? _audioPath;
   String _lastWords = '';
-  String _geminiResponse = '';
+  String _geminiResponse = 'Initializing...';
   bool _isFullScreen = false;
   bool _isListening = false;
   bool _isProcessing = false;
+  bool _isInitialized = false;
+  bool _isAudioPlaying = false;
+  bool _isMuted = false;
   late AnimationController _blinkController;
   late AnimationController _loadingController;
   late Animation<double> _dot1Animation;
@@ -67,8 +70,32 @@ class _ControlCenterPageState extends State<ControlCenterPage> with TickerProvid
         curve: const Interval(0.66, 1.0, curve: Curves.easeInOut),
       ),
     );
+
+    _audioPlayer.onPlayerStateChanged.listen((state) {
+      print('🔊 Audio player state changed to: $state');
+      
+      // Handle audio starting to play - stop microphone
+      if (state == PlayerState.playing && _isListening) {
+        print('🔊 Audio started playing, stopping microphone');
+        _stopListening();
+      }
+      
+      setState(() {
+        _isAudioPlaying = state == PlayerState.playing;
+      });
+      
+      // Handle audio completion - restart microphone
+      if (state == PlayerState.completed) {
+        print('🔊 Audio playback completed, resuming listening...');
+        _startListening();
+        setState(() {
+          _isListening = true;
+        });
+      }
+    });
     
     _initSpeech();
+    _playGreeting();
   }
 
   @override
@@ -84,13 +111,56 @@ class _ControlCenterPageState extends State<ControlCenterPage> with TickerProvid
   }
 
   Future<void> _initSpeech() async {
-    // Request microphone permission
+    if (_isInitialized) return;
+    
+    print('🔊 Initializing speech recognition...');
     final status = await Permission.microphone.request();
+    print('🔊 Microphone permission status: $status');
+    
     if (status.isGranted) {
-      await _speechToText.initialize();
+      print('🔊 Microphone permission granted, initializing speech to text...');
+      bool success = await _speechToText.initialize(
+        onError: (error) {
+          print('🔊 Speech recognition error: $error');
+          
+          // Handle ANY permanent error by completely reinitializing speech recognition
+          if (error.permanent) {
+            print('🔊 Permanent error detected: ${error.errorMsg}, reinitializing speech recognition...');
+            
+            _speechToText.stop();
+            setState(() {
+              _isListening = false;
+              _isInitialized = false;  // Reset initialization flag
+            });
+            
+            // Create a new instance
+            _speechToText = SpeechToText();
+            
+            // Reinitialize after a short delay
+            Future.delayed(const Duration(milliseconds: 500), () {
+              if (mounted && !_isAudioPlaying) {
+                _initSpeech().then((_) {
+                  if (mounted && _isInitialized && !_isAudioPlaying) {
+                    _startListening();
+                  }
+                });
+              }
+            });
+          } else if (error.errorMsg == 'error_speech_timeout') {
+            // Handle timeout specifically
+            _handleTimeout();
+          }
+        }
+      );
+      print('🔊 Speech to text initialized: $success');
+      
       if (!mounted) return;
-      _playGreeting();
+      
+      setState(() {
+        _isInitialized = true;
+      });
     } else {
+      print('🔊 Microphone permission denied');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -103,6 +173,9 @@ class _ControlCenterPageState extends State<ControlCenterPage> with TickerProvid
 
   Future<void> _playGreeting() async {
     try {
+      setState(() {
+        _geminiResponse = 'Hello world!';
+      });
       // Encode the greeting message
       _audioPath = await VoiceService.encodeMessage(
         message: "Hello world!",
@@ -111,8 +184,10 @@ class _ControlCenterPageState extends State<ControlCenterPage> with TickerProvid
         volume: 100,
       );
 
-      // Play the audio file
-      await _audioPlayer.play(DeviceFileSource(_audioPath!));
+      // Play the audio file only if not muted
+      if (!_isMuted) {
+        await _audioPlayer.play(DeviceFileSource(_audioPath!));
+      }
       
       // Start listening after greeting
       _startListening();
@@ -124,92 +199,169 @@ class _ControlCenterPageState extends State<ControlCenterPage> with TickerProvid
   }
 
   void _startListening() async {
-    if (!_isListening) {
-      try {
-        bool available = await _speechToText.initialize();
-        if (available) {
-          setState(() => _isListening = true);
-          await _speechToText.listen(
-            onResult: (result) {
-              setState(() {
-                _lastWords = result.recognizedWords;
-              });
-              if (result.finalResult) {
-                _processSpeech();
-              }
-            },
-            listenMode: ListenMode.dictation,
-            cancelOnError: false,
-            partialResults: true,
-            listenFor: const Duration(seconds: 30),
-            pauseFor: const Duration(seconds: 3),
-          );
-        } else {
-          print('Speech recognition not available, retrying...');
-          Future.delayed(const Duration(seconds: 1), () {
-            _startListening();
+    if (!_isInitialized || _isListening || _isAudioPlaying) {
+      print('🔊 Cannot start listening: initialized=$_isInitialized, listening=$_isListening, audioPlaying=$_isAudioPlaying');
+      return;
+    }
+    
+    print('🔊 Starting listening...');
+    try {
+      setState(() => _isListening = true);
+      await _speechToText.listen(
+        onResult: (result) {
+          print('🔊 Speech result [final=${result.finalResult}]: "${result.recognizedWords}"');
+          if (result.recognizedWords.isNotEmpty) {
+            setState(() {
+              _lastWords = result.recognizedWords;
+            });
+            if (result.finalResult) {
+              print('🔊 Final result received, processing speech...');
+              _processSpeech();
+              _stopListening();
+              _startListening();
+            }
+          }
+        },
+        listenMode: ListenMode.dictation,
+        cancelOnError: true,
+        partialResults: true,
+        listenFor: const Duration(seconds: 15),  
+        onSoundLevelChange: (level) {
+          // Print sound level changes occasionally for debugging
+          if (level > 0 && DateTime.now().second % 5 == 0) {
+            print('🔊 Sound level: $level');
+          }
+        }
+      );
+      print('🔊 Started listening successfully');
+    } catch (e) {
+      print('🔊 Error starting speech recognition: $e');
+      setState(() {
+        _isListening = false;
+        _isInitialized = false;
+      });
+      
+      // Recreate the speech recognition instance
+      _speechToText = SpeechToText();
+      
+      Future.delayed(const Duration(seconds: 1), () {
+        if (mounted && !_isAudioPlaying) {
+          _initSpeech().then((_) {
+            if (mounted && _isInitialized && !_isAudioPlaying) {
+              _startListening();
+            }
           });
         }
-      } catch (e) {
-        print('Error starting speech recognition: $e');
-        Future.delayed(const Duration(seconds: 1), () {
-          _startListening();
-        });
-      }
+      });
     }
   }
 
   void _stopListening() {
-    if (_isListening) {
-      _speechToText.stop();
-      setState(() => _isListening = false);
-    }
+    if (!_isListening) return;
+    
+    print('🔊 Stopping listening...');
+    _speechToText.stop();
+    setState(() => _isListening = false);
+    print('🔊 Listening stopped');
+  }
+
+  void _forceRestartListening() {
+    print('🔊 Force restarting listening...');
+    _speechToText.stop();
+    setState(() => _isListening = false);
+    
+    Future.delayed(const Duration(milliseconds: 300), () {
+      if (mounted && !_isAudioPlaying) {
+        _startListening();
+      }
+    });
   }
 
   Future<void> _processSpeech() async {
-    if (_lastWords.isEmpty) return;
+    if (_lastWords.isEmpty) {
+      print('🔊 No words to process, continuing to listen');
+      return;
+    }
 
-    // Stop listening before processing
-    _stopListening();
+    // Check for mute/unmute commands
+    final lowerCaseWords = _lastWords.toLowerCase().trim();
+    if (lowerCaseWords == "mute yourself") {
+      setState(() {
+        _isMuted = true;
+        _geminiResponse = "I'm now muted. Say 'unmute yourself' to hear me again.";
+      });
+      print('🔊 Audio muted by voice command');
+      return;
+    } else if (lowerCaseWords == "unmute yourself" || lowerCaseWords == "and you yourself") {
+      setState(() {
+        _isMuted = false;
+        _lastWords = 'unmute yourself';
+        _geminiResponse = "I'm unmuted and ready to speak again.";
+      });
+      print('🔊 Audio unmuted by voice command');
+      return;
+    }
+
+    print('🔊 Processing speech: $_lastWords');
+    _stopListening();  // Stop listening first
     
     setState(() {
       _isProcessing = true;
     });
 
     try {
-      // Get response from Gemini
+      print('🔊 Getting response from Gemini...');
       _geminiResponse = await GeminiService.getResponse(_lastWords);
+      print('🔊 Gemini response received: $_geminiResponse');
       
-      // Update UI with response immediately
       setState(() {});
       
-      // Encode and play the response
-      _audioPath = await VoiceService.encodeMessage(
-        message: _geminiResponse,
-        protocolId: 1,
-        sampleRate: 48000,
-        volume: 100,
-      );
+      // Only encode and play audio if not muted
+      if (!_isMuted) {
+        print('🔊 Encoding response to audio...');
+        _audioPath = await VoiceService.encodeMessage(
+          message: _geminiResponse.length > 5 ? _geminiResponse.substring(0, 5) : _geminiResponse,
+          protocolId: 1,
+          sampleRate: 48000,
+          volume: 100,
+        );
 
-      await _audioPlayer.play(DeviceFileSource(_audioPath!));
+        // Make absolutely sure microphone is stopped before playing audio
+        if (_isListening) {
+          print('🔊 Ensuring microphone is off before playing audio');
+          _stopListening();
+        }
+
+        print('🔊 Playing response audio...');
+        try {
+          await _audioPlayer.play(DeviceFileSource(_audioPath!));
+          print('🔊 Audio playback started successfully');
+        } catch (audioError) {
+          print('🔊 ERROR PLAYING AUDIO: $audioError');
+          // If audio fails, force restart listening
+          _forceRestartListening();
+        }
+      } else {
+        print('🔊 Audio is muted, skipping playback');
+        _forceRestartListening();
+      }
       
-      // Wait for audio to finish playing before starting to listen again
-      await Future.delayed(const Duration(milliseconds: 500));
-      
-      // Clear the last words to prepare for new input
-      setState(() {
-        _lastWords = '';
-      });
-      
-      // Start listening again after response
-      _startListening();
-    } catch (e) {
-      print('Error processing speech: $e');
-      _startListening();
-    } finally {
       setState(() {
         _isProcessing = false;
       });
+      
+      // If muted, we need to manually restart listening since there won't be an audio completion event
+      if (_isMuted) {
+        _forceRestartListening();
+      }
+      // Otherwise, listening will resume from the audioPlayer.onPlayerStateChanged handler
+    } catch (e) {
+      print('🔊 Error processing speech: $e');
+      setState(() {
+        _isProcessing = false;
+      });
+      // Force restart listening if there was an error
+      _forceRestartListening();
     }
   }
 
@@ -245,6 +397,30 @@ class _ControlCenterPageState extends State<ControlCenterPage> with TickerProvid
     );
   }
 
+  // Add a method to handle timeout and recreate the instance
+  void _handleTimeout() {
+    print('🔊 Speech recognition timeout, recreating instance...');
+    _speechToText.stop();
+    setState(() {
+      _isListening = false;
+      _isInitialized = false;
+    });
+    
+    // Create a new instance
+    _speechToText = SpeechToText();
+    
+    // Reinitialize after delay
+    Future.delayed(const Duration(milliseconds: 500), () {
+      if (mounted && !_isAudioPlaying) {
+        _initSpeech().then((_) {
+          if (mounted && _isInitialized && !_isAudioPlaying) {
+            _startListening();
+          }
+        });
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isFullScreen) {
@@ -254,14 +430,41 @@ class _ControlCenterPageState extends State<ControlCenterPage> with TickerProvid
         backgroundColor: Colors.black,
         body: GestureDetector(
           onTap: _toggleFullScreen,
-          child: Center(
-            child: Padding(
-              padding: EdgeInsets.only(right: isLandscape ? 50 : 0),
-              child: Transform.scale(
-                scale: isLandscape ? 4.0 : 1.0,
-                child: const RoboEyes(),
+          child: Stack(
+            children: [
+              Center(
+                child: Padding(
+                  padding: EdgeInsets.only(right: isLandscape ? 50 : 0, bottom: isLandscape ? 0 : 40),
+                  child: Transform.scale(
+                    scale: isLandscape ? 3.0 : 1.0,
+                    child: const RoboEyes(),
+                  ),
+                ),
               ),
-            ),
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: isLandscape ? 0 : 40,
+                child: Container(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: isLandscape ? 0 : 24, 
+                    vertical: 16
+                  ),
+                  margin: EdgeInsets.only(
+                    right: isLandscape ? 50 : 0
+                  ),
+                  child: Text(
+                    _geminiResponse,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       );
@@ -301,10 +504,10 @@ class _ControlCenterPageState extends State<ControlCenterPage> with TickerProvid
               ),
             ),
             const SizedBox(height: 20),
-            if (_lastWords.isNotEmpty)
               Container(
                 padding: const EdgeInsets.all(16),
                 margin: const EdgeInsets.symmetric(horizontal: 16),
+                width: MediaQuery.of(context).size.width,
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(20),
@@ -312,25 +515,9 @@ class _ControlCenterPageState extends State<ControlCenterPage> with TickerProvid
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      'You:',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Colors.grey[600],
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      _lastWords,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        color: Colors.black,
-                      ),
-                    ),
-                    if (_geminiResponse.isNotEmpty) ...[
-                      const SizedBox(height: 16),
+                    if (_lastWords.isNotEmpty) ...[
                       Text(
-                        'Emo:',
+                        'You:',
                         style: TextStyle(
                           fontSize: 14,
                           color: Colors.grey[600],
@@ -338,13 +525,29 @@ class _ControlCenterPageState extends State<ControlCenterPage> with TickerProvid
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        _geminiResponse,
+                        _lastWords,
                         style: const TextStyle(
                           fontSize: 16,
                           color: Colors.black,
                         ),
                       ),
                     ],
+                    const SizedBox(height: 16),
+                    Text(
+                      'Emo:',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Colors.grey[600],
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      _geminiResponse.isNotEmpty ? _geminiResponse : '',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        color: Colors.black,
+                      ),
+                    ),
                   ],
                 ),
               ),
