@@ -1,6 +1,7 @@
 
 # 🖤 EMO-Bot: The Emotionally Broken Companion Robot
-![PPT]([https://devpost.com/software/emo-bot](https://deanza.my.canva.site/emo-bot))
+
+https://deanza.my.canva.site/emo-bot
 
 ![devpost](https://devpost.com/software/emo-bot)
 
