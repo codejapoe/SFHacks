@@ -1,4 +1,9 @@
+
 # 🖤 EMO-Bot: The Emotionally Broken Companion Robot
+![PPT](https://devpost.com/software/emo-bot)
+
+![devpost](https://devpost.com/software/emo-bot)
+
 
 > _"Everyone deserves a companion."_  
 > _Do things that don’t scale._  
