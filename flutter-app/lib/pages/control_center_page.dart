@@ -430,6 +430,17 @@ class _ControlCenterPageState extends State<ControlCenterPage> with TickerProvid
         backgroundColor: Colors.black,
         body: GestureDetector(
           onTap: _toggleFullScreen,
+          onDoubleTap: () {
+            setState(() {
+              _isMuted = !_isMuted;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(_isMuted ? 'Audio muted' : 'Audio unmuted'),
+                  duration: const Duration(seconds: 1),
+                ),
+              );
+            });
+          },
           child: Stack(
             children: [
               Center(
@@ -437,8 +448,40 @@ class _ControlCenterPageState extends State<ControlCenterPage> with TickerProvid
                   padding: EdgeInsets.only(right: isLandscape ? 50 : 0, bottom: isLandscape ? 0 : 40),
                   child: Transform.scale(
                     scale: isLandscape ? 3.0 : 1.0,
-                    child: const RoboEyes(),
+                    child: RoboEyes(isMuted: _isMuted, isFullScreen: false),
                   ),
+                ),
+              ),
+              Positioned(
+                top: isLandscape ? 25 : 50,
+                right: isLandscape ? 20 : 10,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(1),
+                      ),
+                      child: Icon(
+                        _isMuted ? Icons.volume_off : Icons.volume_up, 
+                        color: Colors.white, 
+                        size: 24,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(1),
+                      ),
+                      child: const Icon(
+                        Icons.battery_5_bar, 
+                        color: Colors.white, 
+                        size: 24,
+                      ),
+                    ),
+                  ],
                 ),
               ),
               Positioned(
@@ -498,9 +541,43 @@ class _ControlCenterPageState extends State<ControlCenterPage> with TickerProvid
             const SizedBox(height: 20),
             Container(
               height: 200,
-              child: GestureDetector(
-                onTap: _toggleFullScreen,
-                child: const RoboEyes(),
+              child: Stack(
+                children: [
+                  GestureDetector(
+                    onTap: _toggleFullScreen,
+                    onDoubleTap: () {
+                      setState(() {
+                        _isMuted = !_isMuted;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(_isMuted ? 'Audio muted' : 'Audio unmuted'),
+                            duration: const Duration(seconds: 1),
+                          ),
+                        );
+                      });
+                    },
+                    child: RoboEyes(isMuted: _isMuted, isFullScreen: false),
+                  ),
+                  Positioned(
+                    top: 10,
+                    right: 10,
+                    child: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(1),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(_isMuted ? Icons.volume_off : Icons.volume_up, color: Colors.white, size: 16),
+                          const SizedBox(width: 8),
+                          Icon(Icons.battery_full, color: Colors.white, size: 16),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
             const SizedBox(height: 20),

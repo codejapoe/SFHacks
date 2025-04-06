@@ -3,7 +3,14 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 
 class RoboEyes extends StatefulWidget {
-  const RoboEyes({Key? key}) : super(key: key);
+  final bool isMuted;
+  final bool isFullScreen;
+  
+  const RoboEyes({
+    Key? key, 
+    this.isMuted = false,
+    this.isFullScreen = false,
+  }) : super(key: key);
 
   @override
   _RoboEyesState createState() => _RoboEyesState();
