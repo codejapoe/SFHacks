@@ -3,8 +3,7 @@
 
 https://deanza.my.canva.site/emo-bot
 
-![devpost](https://devpost.com/software/emo-bot)
-
+https://devpost.com/software/emo-bot
 
 > _"Everyone deserves a companion."_  
 > _Do things that don’t scale._  
